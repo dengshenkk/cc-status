@@ -1,33 +1,35 @@
 # Solution
 
-## 当前结论
-
-项目中已经存在“点击浮动窗口中的状态灯，尝试拉起对应终端窗口并聚焦”的实现，核心代码位于：
-
-- `Sources/CCStatus/StatusLightView.swift:72`：处理鼠标点击并判断命中的灯
-- `Sources/CCStatus/StatusLightView.swift:132`：根据 Claude Code 会话 PID 查找终端应用
-- `Sources/CCStatus/StatusLightView.swift:170`：通过 AppleScript 激活对应终端窗口或终端应用
-- `Sources/CCStatus/StatusLightView.swift:237`：通过 `lsof` 获取进程 TTY
-- `Sources/CCStatus/StatusLightView.swift:258`：通过 `ps` 获取父进程 PID
-
-## 现有执行链路
-
-1. 浮动窗口通过 `StatusLightWindow.updateSessions(_:)` 把会话列表传给 `StatusLightView`。
-2. `StatusLightView.mouseDown(with:)` 根据点击位置匹配灯的中心点。
-3. 命中某个灯后取 `sessions[i].pid`。
-4. 后台线程调用 `focusTerminal(pid:)`。
-5. `focusTerminal(pid:)` 获取该进程的 TTY，并沿父进程向上查找终端应用。
-6. 找到终端后调用 `activateTerminalWindow(bundleId:tty:)`：
-   - iTerm2 / Terminal.app：尝试按 TTY 精确选择窗口和标签页。
-   - 其他终端：退化为激活对应应用。
-
 ## 执行结果
 
-- 基线提交：`4267e5b` - `Initial cc status baseline`
-- 修改提交：`a75472e` - `Improve terminal focus on light click: capture session early, better TTY lookup, add failure logs`
+| 项目 | 值 |
+|------|-----|
+| 基线提交 | `4267e5b` - Initial cc status baseline |
+| 方案A提交 | `a75472e` - Improve terminal focus on light click |
+| 修复提交 | `0dfc479` - Fix terminal focus: prioritize TTY-based activation |
+| CI/CD提交 | `d0dd45b` - Add GitHub Actions release workflow |
+| GitHub仓库 | https://github.com/dengshenkk/cc-status |
 
-## 方案 A 改动内容
+## 修复内容
 
-1. `mouseDown` 立即捕获 `session` 的 `pid` 和 `sessionId`，避免异步线程读取 `sessions` 数组时数据不一致。
-2. `focusTerminal` 增加 `sessionId` 参数用于日志；先从当前进程获取 TTY，如果失败再沿父进程链查找；查找失败时打印日志。
-3. `activateTerminalWindow` 增加 `sessionId` 参数；AppleScript 执行失败时打印错误详情。
+**问题根因**：iTerm2 场景下，Claude Code 的父进程链是 `iTermServer`，不是 iTerm2 GUI 主应用，导致 `NSRunningApplication(processIdentifier:)` 返回 `nil`，AppleScript 聚焦逻辑未执行。
+
+**修复方案**：
+1. 新增 `activateKnownTerminalByTTY(_:_:)` - 按 TTY 直接执行 iTerm2/Terminal AppleScript
+2. 新增 `executeAppleScript(_:_:)` - 同步执行 AppleScript 并返回布尔结果
+3. 修正 Terminal.app 的 bundle id 大小写兼容
+4. 在 `focusTerminal` 中获取 TTY 后优先调用 TTY 直接聚焦路径，失败后再走父进程 fallback
+
+## GitHub CI/CD 使用方式
+
+```bash
+# 创建并推送标签触发自动发布
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+GitHub Actions 会自动：
+1. 在 macOS runner 上编译
+2. 打包 CCStatus.app
+3. 创建 CC-Status.dmg
+4. 发布 GitHub Release

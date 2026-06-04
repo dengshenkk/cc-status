@@ -11,5 +11,7 @@
 - [x] 用户反馈点击后没有拉起窗口
 - [x] 分析根因：iTerm2 父进程链是 iTermServer，NSRunningApplication 找不到终端 App
 - [x] 实现按 TTY 直接聚焦 iTerm2/Terminal 的路径
-- [ ] 用户验证修复效果
-- [ ] 提交修复到 git
+- [x] 用户验证修复效果 - 可用
+- [x] 提交修复到 git
+- [x] 创建 GitHub Actions CI/CD workflow
+- [x] 推送到 GitHub

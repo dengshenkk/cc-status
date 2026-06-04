@@ -37,4 +37,35 @@
   4. 在 `focusTerminal` 中获取 TTY 后优先调用 TTY 直接聚焦路径。
 - 输出：编译通过，应用已重启。
 - 结论：等待用户验证效果。
-- 状态：doing
+- 状态：success
+
+## Step 9: 用户验证修复效果
+- 输入：用户测试点击状态灯。
+- 操作：用户点击状态灯验证。
+- 输出：用户确认修复有效。
+- 结论：可以提交修复并创建 CI/CD。
+- 状态：success
+
+## Step 10: 提交修复到 git
+- 输入：用户确认修复有效。
+- 操作：`git add` + `git commit`。
+- 输出：commit `0dfc479`。
+- 结论：修复已提交。
+- 状态：success
+
+## Step 11: 创建 GitHub Actions CI/CD
+- 输入：用户要求创建标签触发的自动打包发布 CI/CD。
+- 操作：
+  1. 创建 `.github/workflows/release.yml`。
+  2. 配置 `on: push: tags: - 'v*'` 触发。
+  3. 在 macOS runner 上编译、打包 app、创建 DMG、发布 GitHub Release。
+- 输出：workflow 文件已创建。
+- 结论：CI/CD 配置完成。
+- 状态：success
+
+## Step 12: 推送到 GitHub
+- 输入：仓库地址 git@github.com:dengshenkk/cc-status.git。
+- 操作：`git remote add origin` + `git push -u origin main`。
+- 输出：推送成功。
+- 结论：代码已上传到 GitHub。
+- 状态：success

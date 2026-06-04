@@ -1,8 +1,8 @@
 {
-  "task": "修复点击灯后终端不拉起",
-  "current_step": "等待用户验证修复效果",
-  "status": "doing",
-  "progress": "已实现按 TTY 直接通过 iTerm2/Terminal AppleScript 聚焦，编译通过，应用已重启。",
+  "task": "修复点击灯后终端不拉起 + 创建 GitHub CI/CD",
+  "current_step": "完成",
+  "status": "done",
+  "progress": "修复验证通过，已提交修复；已创建 GitHub Actions workflow；已推送到 GitHub。",
   "last_update": "2026-06-04",
   "error": ""
 }
