@@ -27,7 +27,7 @@ rm -rf CCStatus.app
 mkdir -p CCStatus.app/Contents/MacOS CCStatus.app/Contents/Resources
 cp cc-status CCStatus.app/Contents/MacOS/
 cp Sources/CCStatus/Info.plist CCStatus.app/Contents/
-codesign --force --deep --sign - CCStatus.app
+codesign --force --deep --sign - --entitlements entitlements.plist CCStatus.app
 echo "==> 打包成功 ✓"
 
 echo "==> 启动..."
