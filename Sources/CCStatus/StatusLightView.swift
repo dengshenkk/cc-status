@@ -78,9 +78,12 @@ class StatusLightView: NSView {
             let dx = point.x - center.x
             let dy = point.y - center.y
             if dx * dx + dy * dy <= hitRadius * hitRadius {
-                let pid = Int32(sessions[i].pid)
+                // 立即捕获 session 信息，避免异步线程读取时数据不一致
+                let session = sessions[i]
+                let pid = Int32(session.pid)
+                let sessionId = session.id
                 DispatchQueue.global(qos: .userInitiated).async {
-                    self.focusTerminal(pid: pid)
+                    self.focusTerminal(pid: pid, sessionId: sessionId)
                 }
                 return
             }
@@ -129,13 +132,30 @@ class StatusLightView: NSView {
 
     // MARK: - Terminal focus
 
-    private func focusTerminal(pid: Int32) {
-        let tty = ttyOfProcess(pid)
+    private func focusTerminal(pid: Int32, sessionId: String) {
+        // 先尝试从当前进程获取 TTY
+        var tty = ttyOfProcess(pid)
+
+        // 如果当前进程没有 TTY，沿父进程链查找
         var currentPid = pid
+        if tty == nil {
+            for _ in 0..<8 {
+                currentPid = parentPid(of: currentPid)
+                guard currentPid > 0 else { break }
+                tty = ttyOfProcess(currentPid)
+                if tty != nil { break }
+            }
+        }
+
+        // 重置 currentPid 用于查找终端应用
+        currentPid = pid
         for _ in 0..<8 {
             guard let app = NSRunningApplication(processIdentifier: currentPid) else {
                 currentPid = parentPid(of: currentPid)
-                guard currentPid > 0 else { return }
+                guard currentPid > 0 else {
+                    print("[CCStatus] session=\(sessionId): 未找到终端父进程")
+                    return
+                }
                 continue
             }
 
@@ -158,16 +178,20 @@ class StatusLightView: NSView {
                 terminalKeywords.contains(where: { execName.contains($0) })
 
             if isTerminal {
-                activateTerminalWindow(bundleId: bundleId, tty: tty)
+                activateTerminalWindow(bundleId: bundleId, tty: tty, sessionId: sessionId)
                 return
             }
 
             currentPid = parentPid(of: currentPid)
-            guard currentPid > 0 else { return }
+            guard currentPid > 0 else {
+                print("[CCStatus] session=\(sessionId): 未找到终端父进程")
+                return
+            }
         }
+        print("[CCStatus] session=\(sessionId): 查找终端失败，pid=\(pid)")
     }
 
-    private func activateTerminalWindow(bundleId: String, tty: String?) {
+    private func activateTerminalWindow(bundleId: String, tty: String?, sessionId: String) {
         let ttyName = tty?.replacingOccurrences(of: "/dev/", with: "") ?? ""
 
         let script: String
@@ -230,6 +254,9 @@ class StatusLightView: NSView {
             if let appleScript = NSAppleScript(source: script) {
                 var error: NSDictionary?
                 appleScript.executeAndReturnError(&error)
+                if let err = error {
+                    print("[CCStatus] session=\(sessionId): AppleScript 执行失败: \(err)")
+                }
             }
         }
     }

@@ -21,9 +21,12 @@
 - 结论：功能核心实现位于 `Sources/CCStatus/StatusLightView.swift`。
 - 状态：success
 
-## Step 4: 初步判断现有实现
-- 输入：`StatusLightView.swift` 中的鼠标点击与终端聚焦代码。
-- 操作：审阅 `mouseDown(with:)`、`focusTerminal(pid:)`、`activateTerminalWindow(bundleId:tty:)`、`ttyOfProcess(_:)`、`parentPid(of:)`。
-- 输出：代码已通过命中灯位置 → 获取 session PID → 获取 TTY → 查找终端应用 → AppleScript 激活窗口的路径实现点击聚焦。
-- 结论：当前更像是“验证和补强现有实现”而不是从零实现。
+## Step 5: 实施方案 A 的代码改动
+- 输入：用户确认采用方案 A。
+- 操作：修改 `StatusLightView.swift`：
+  1. `mouseDown` 立即捕获 session 信息，避免异步线程数据不一致。
+  2. `focusTerminal` 增加 `sessionId` 参数用于日志；先从当前进程获取 TTY，再沿父进程链查找；增加失败日志。
+  3. `activateTerminalWindow` 增加 `sessionId` 参数；AppleScript 执行失败时打印错误。
+- 输出：编译通过，无错误。
+- 结论：方案 A 实施完成。
 - 状态：success
