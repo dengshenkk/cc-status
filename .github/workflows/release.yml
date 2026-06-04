@@ -17,6 +17,7 @@ jobs:
 
       - name: Build
         run: |
+          # Build for arm64
           swiftc \
             Sources/CCStatus/main.swift \
             Sources/CCStatus/AppDelegate.swift \
@@ -24,11 +25,30 @@ jobs:
             Sources/CCStatus/StatusLightView.swift \
             Sources/CCStatus/StatusLightWindow.swift \
             Sources/CCStatus/MenuBarIcon.swift \
-            -o cc-status \
+            -o cc-status-arm64 \
             -framework AppKit \
             -framework Foundation \
             -framework ServiceManagement \
-            -swift-version 5
+            -swift-version 5 \
+            -target arm64-apple-macosx12.0
+
+          # Build for x86_64
+          swiftc \
+            Sources/CCStatus/main.swift \
+            Sources/CCStatus/AppDelegate.swift \
+            Sources/CCStatus/SessionMonitor.swift \
+            Sources/CCStatus/StatusLightView.swift \
+            Sources/CCStatus/StatusLightWindow.swift \
+            Sources/CCStatus/MenuBarIcon.swift \
+            -o cc-status-x86_64 \
+            -framework AppKit \
+            -framework Foundation \
+            -framework ServiceManagement \
+            -swift-version 5 \
+            -target x86_64-apple-macosx12.0
+
+          # Create universal binary
+          lipo -create cc-status-arm64 cc-status-x86_64 -output cc-status
 
       - name: Package App
         run: |
