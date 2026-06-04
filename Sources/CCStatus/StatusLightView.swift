@@ -208,6 +208,7 @@ class StatusLightView: NSView {
         let runningBundleIds = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleIdentifier })
 
         if runningBundleIds.contains("com.googlecode.iterm2") {
+            print("[CCStatus] session=\(sessionId): iTerm2 正在运行，尝试 AppleScript 匹配 tty=\(ttyName)")
             let script = """
             tell application "iTerm2"
                 set found to false
@@ -235,6 +236,8 @@ class StatusLightView: NSView {
             if executeAppleScript(script, sessionId: sessionId) {
                 return true
             }
+        } else {
+            print("[CCStatus] session=\(sessionId): iTerm2 未运行")
         }
 
         if runningBundleIds.contains("com.apple.Terminal") || runningBundleIds.contains("com.apple.terminal") {
@@ -354,7 +357,10 @@ class StatusLightView: NSView {
                     print("[CCStatus] session=\(sessionId): AppleScript 执行失败: \(err)")
                 } else {
                     result = output.booleanValue
+                    print("[CCStatus] session=\(sessionId): AppleScript 返回 result=\(result)")
                 }
+            } else {
+                print("[CCStatus] session=\(sessionId): 无法创建 NSAppleScript")
             }
             semaphore.signal()
         }
