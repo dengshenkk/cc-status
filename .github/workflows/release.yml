@@ -55,7 +55,7 @@ jobs:
           mkdir -p CCStatus.app/Contents/MacOS
           cp cc-status CCStatus.app/Contents/MacOS/
           cp Sources/CCStatus/Info.plist CCStatus.app/Contents/
-          codesign --force --deep --sign - CCStatus.app
+          codesign --force --deep --sign - --entitlements entitlements.plist CCStatus.app
 
       - name: Create DMG
         run: |
