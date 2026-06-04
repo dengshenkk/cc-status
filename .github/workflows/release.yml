@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          swiftc \
+            Sources/CCStatus/main.swift \
+            Sources/CCStatus/AppDelegate.swift \
+            Sources/CCStatus/SessionMonitor.swift \
+            Sources/CCStatus/StatusLightView.swift \
+            Sources/CCStatus/StatusLightWindow.swift \
+            Sources/CCStatus/MenuBarIcon.swift \
+            -o cc-status \
+            -framework AppKit \
+            -framework Foundation \
+            -framework ServiceManagement \
+            -swift-version 5
+
+      - name: Package App
+        run: |
+          mkdir -p CCStatus.app/Contents/MacOS
+          cp cc-status CCStatus.app/Contents/MacOS/
+          cp Sources/CCStatus/Info.plist CCStatus.app/Contents/
+          codesign --force --deep --sign - CCStatus.app
+
+      - name: Create DMG
+        run: |
+          hdiutil create -volname "CC Status" -srcfolder CCStatus.app -ov -format UDZO CC-Status.dmg
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: CC Status ${{ steps.version.outputs.VERSION }}
+          files: CC-Status.dmg
+          generate_release_notes: true
