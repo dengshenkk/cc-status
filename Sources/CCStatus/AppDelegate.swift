@@ -114,16 +114,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func applyLaunchAtLogin(_ enable: Bool) {
-        if #available(macOS 13.0, *) {
-            do {
-                if enable { try SMAppService.mainApp.register() }
-                else       { try SMAppService.mainApp.unregister() }
-            } catch {
-                print("Launch at login error: \(error)")
-            }
-        } else {
-            // macOS 12 不支持 SMAppService，跳过开机自启功能
-            print("Launch at login requires macOS 13.0+")
+        do {
+            if enable { try SMAppService.mainApp.register() }
+            else       { try SMAppService.mainApp.unregister() }
+        } catch {
+            print("Launch at login error: \(error)")
         }
     }
 

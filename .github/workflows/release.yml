@@ -30,7 +30,7 @@ jobs:
             -framework Foundation \
             -framework ServiceManagement \
             -swift-version 5 \
-            -target arm64-apple-macosx12.0
+            -target arm64-apple-macosx13.0
 
           # Build for x86_64
           swiftc \
@@ -45,7 +45,7 @@ jobs:
             -framework Foundation \
             -framework ServiceManagement \
             -swift-version 5 \
-            -target x86_64-apple-macosx12.0
+            -target x86_64-apple-macosx13.0
 
           # Create universal binary
           lipo -create cc-status-arm64 cc-status-x86_64 -output cc-status

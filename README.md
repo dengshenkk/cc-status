@@ -49,7 +49,7 @@ swiftc \
 
 ## 系统要求
 
-- macOS 12.0+
+- macOS 13.0+
 - Claude Code（需已安装，会话文件位于 `~/.claude/sessions/`）
 
 ## 进程检测说明
