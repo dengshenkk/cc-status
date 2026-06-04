@@ -147,7 +147,16 @@ class StatusLightView: NSView {
             }
         }
 
-        // 重置 currentPid 用于查找终端应用
+        if let tty = tty {
+            print("[CCStatus] session=\(sessionId): 尝试按 TTY 聚焦终端，tty=\(tty)")
+            if activateKnownTerminalByTTY(tty, sessionId: sessionId) {
+                return
+            }
+        } else {
+            print("[CCStatus] session=\(sessionId): 未找到 TTY，进入父进程 fallback")
+        }
+
+        // 重置 currentPid 用于查找终端应用，作为通用 fallback
         currentPid = pid
         for _ in 0..<8 {
             guard let app = NSRunningApplication(processIdentifier: currentPid) else {
@@ -164,6 +173,7 @@ class StatusLightView: NSView {
 
             let knownTerminals = [
                 "com.googlecode.iterm2",
+                "com.apple.Terminal",
                 "com.apple.terminal",
                 "net.kovidgoyal.kitty",
                 "org.alacritty",
@@ -189,6 +199,72 @@ class StatusLightView: NSView {
             }
         }
         print("[CCStatus] session=\(sessionId): 查找终端失败，pid=\(pid)")
+    }
+
+    private func activateKnownTerminalByTTY(_ tty: String, sessionId: String) -> Bool {
+        let ttyName = tty.replacingOccurrences(of: "/dev/", with: "")
+        guard !ttyName.isEmpty else { return false }
+
+        let runningBundleIds = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleIdentifier })
+
+        if runningBundleIds.contains("com.googlecode.iterm2") {
+            let script = """
+            tell application "iTerm2"
+                set found to false
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        repeat with s in sessions of t
+                            try
+                                if tty of s contains "\(ttyName)" then
+                                    select s
+                                    select t
+                                    set index of w to 1
+                                    set found to true
+                                    exit repeat
+                                end if
+                            end try
+                        end repeat
+                        if found then exit repeat
+                    end repeat
+                    if found then exit repeat
+                end repeat
+                if found then activate
+                return found
+            end tell
+            """
+            if executeAppleScript(script, sessionId: sessionId) {
+                return true
+            }
+        }
+
+        if runningBundleIds.contains("com.apple.Terminal") || runningBundleIds.contains("com.apple.terminal") {
+            let script = """
+            tell application "Terminal"
+                set found to false
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        try
+                            if tty of t contains "\(ttyName)" then
+                                set selected of t to true
+                                set index of w to 1
+                                set found to true
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                    if found then exit repeat
+                end repeat
+                if found then activate
+                return found
+            end tell
+            """
+            if executeAppleScript(script, sessionId: sessionId) {
+                return true
+            }
+        }
+
+        print("[CCStatus] session=\(sessionId): 未按 TTY 找到终端窗口，tty=\(tty)")
+        return false
     }
 
     private func activateTerminalWindow(bundleId: String, tty: String?, sessionId: String) {
@@ -219,7 +295,7 @@ class StatusLightView: NSView {
                 if found then activate
             end tell
             """
-        } else if bundleId == "com.apple.terminal" && !ttyName.isEmpty {
+        } else if (bundleId == "com.apple.Terminal" || bundleId == "com.apple.terminal") && !ttyName.isEmpty {
             script = """
             tell application "Terminal"
                 set found to false
@@ -240,6 +316,10 @@ class StatusLightView: NSView {
             end tell
             """
         } else {
+            guard !bundleId.isEmpty else {
+                print("[CCStatus] session=\(sessionId): 终端进程缺少 bundleId，无法通用激活")
+                return
+            }
             script = """
             tell application id "\(bundleId)"
                 activate
@@ -259,6 +339,28 @@ class StatusLightView: NSView {
                 }
             }
         }
+    }
+
+    /// 同步执行 AppleScript 并返回布尔结果，用于判断是否成功找到并聚焦终端窗口
+    private func executeAppleScript(_ source: String, sessionId: String) -> Bool {
+        var result = false
+        let semaphore = DispatchSemaphore(value: 0)
+
+        DispatchQueue.main.async {
+            if let appleScript = NSAppleScript(source: source) {
+                var error: NSDictionary?
+                let output = appleScript.executeAndReturnError(&error)
+                if let err = error {
+                    print("[CCStatus] session=\(sessionId): AppleScript 执行失败: \(err)")
+                } else {
+                    result = output.booleanValue
+                }
+            }
+            semaphore.signal()
+        }
+
+        semaphore.wait()
+        return result
     }
 
     private func ttyOfProcess(_ pid: Int32) -> String? {

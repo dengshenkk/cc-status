@@ -21,12 +21,20 @@
 - 结论：功能核心实现位于 `Sources/CCStatus/StatusLightView.swift`。
 - 状态：success
 
-## Step 5: 实施方案 A 的代码改动
-- 输入：用户确认采用方案 A。
-- 操作：修改 `StatusLightView.swift`：
-  1. `mouseDown` 立即捕获 session 信息，避免异步线程数据不一致。
-  2. `focusTerminal` 增加 `sessionId` 参数用于日志；先从当前进程获取 TTY，再沿父进程链查找；增加失败日志。
-  3. `activateTerminalWindow` 增加 `sessionId` 参数；AppleScript 执行失败时打印错误。
-- 输出：编译通过，无错误。
-- 结论：方案 A 实施完成。
+## Step 7: 用户反馈点击后没有拉起窗口
+- 输入：用户验证后反馈点击状态灯没有拉起终端窗口。
+- 操作：启动 error-analyst agent 分析根因。
+- 输出：根因是 iTerm2 场景下父进程链是 iTermServer，不是 iTerm2 GUI 主应用，NSRunningApplication 找不到终端 App。
+- 结论：需要修改聚焦策略，优先按 TTY 直接执行 iTerm2/Terminal AppleScript。
 - 状态：success
+
+## Step 8: 实现按 TTY 直接聚焦的修复
+- 输入：根因分析结果。
+- 操作：
+  1. 新增 `activateKnownTerminalByTTY(_:_:)` 函数，先检查 iTerm2/Terminal 是否运行，然后按 TTY 执行 AppleScript。
+  2. 新增 `executeAppleScript(_:_:)` 同步执行辅助函数，返回布尔结果。
+  3. 修正 Terminal.app 的 bundle id 大小写兼容。
+  4. 在 `focusTerminal` 中获取 TTY 后优先调用 TTY 直接聚焦路径。
+- 输出：编译通过，应用已重启。
+- 结论：等待用户验证效果。
+- 状态：doing

@@ -21,9 +21,13 @@
    - iTerm2 / Terminal.app：尝试按 TTY 精确选择窗口和标签页。
    - 其他终端：退化为激活对应应用。
 
-## 待确认事项
+## 执行结果
 
-当前需要确认用户目标是：
+- 基线提交：`4267e5b` - `Initial cc status baseline`
+- 修改提交：`a75472e` - `Improve terminal focus on light click: capture session early, better TTY lookup, add failure logs`
 
-- 只验证现有实现是否能工作；还是
-- 补强现有实现，例如增加失败日志、权限提示、更多终端兼容、无法精确匹配时的 fallback。
+## 方案 A 改动内容
+
+1. `mouseDown` 立即捕获 `session` 的 `pid` 和 `sessionId`，避免异步线程读取 `sessions` 数组时数据不一致。
+2. `focusTerminal` 增加 `sessionId` 参数用于日志；先从当前进程获取 TTY，如果失败再沿父进程链查找；查找失败时打印日志。
+3. `activateTerminalWindow` 增加 `sessionId` 参数；AppleScript 执行失败时打印错误详情。

@@ -1,8 +1,8 @@
 {
-  "task": "补强状态灯点击聚焦终端窗口功能",
-  "current_step": "提交修改到 git",
+  "task": "修复点击灯后终端不拉起",
+  "current_step": "等待用户验证修复效果",
   "status": "doing",
-  "progress": "方案 A 代码改动完成，编译验证通过。",
+  "progress": "已实现按 TTY 直接通过 iTerm2/Terminal AppleScript 聚焦，编译通过，应用已重启。",
   "last_update": "2026-06-04",
   "error": ""
 }
