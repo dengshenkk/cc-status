@@ -1,0 +1,8 @@
+{
+  "task": "分析浮动窗口状态灯点击聚焦终端窗口的实现方案",
+  "current_step": "等待用户确认范围",
+  "status": "pending",
+  "progress": "已完成路径确认、流程文件检查、源码探索；发现 StatusLightView.swift 中已有 mouseDown 和终端聚焦实现。",
+  "last_update": "2026-06-04",
+  "error": ""
+}

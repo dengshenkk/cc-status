@@ -1,0 +1,6 @@
+.DS_Store
+cc-status
+CCStatus.app/
+CC-Status.dmg
+*.o
+*.d
