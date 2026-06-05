@@ -128,14 +128,11 @@ class StatusLightView: NSView {
 
     /// 点击灯后拉起对应终端窗口。
     ///
-    /// 实现原理：
-    /// 1. 用 /bin/ps 找 session.pid 的父进程链，定位终端 app 的 pid
-    /// 2. 用 NSRunningApplication(processIdentifier:) 拿到终端 app
-    /// 3. 先 activate() 保证窗口一定出来
-    /// 4. 对 iTerm2 / Terminal.app 再用 AppleScript 精确把 tty 对应的 tab 前置
-    ///
-    /// 关键：整个流程不依赖 lsof（在 Gatekeeper quarantine 下容易被阻断）。
-    /// tty 通过 /bin/ps -o tty= 获取，ps 是系统工具，始终可用。
+    /// 策略：
+    /// 1. 用 ps -o tty= 拿到 session 进程的 tty（如 "ttys003"）
+    /// 2. 在正在运行的 app 列表里找已知终端（不走父进程链，因为 iTermServer 不是 GUI app）
+    /// 3. activate() 保证窗口出来
+    /// 4. 对 iTerm2 / Terminal.app 用 AppleScript 按 tty 精确前置对应 tab
     private func focusTerminal(for session: SessionInfo) {
         let sessionPid = Int32(session.pid)
         let sessionId  = session.id
@@ -143,60 +140,45 @@ class StatusLightView: NSView {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
-            // 步骤1：从 session pid 沿父进程链找到终端 app
-            guard let (termApp, ttyShort) = self.findTerminalApp(startingFromPid: sessionPid) else {
-                print("[CCStatus] \(sessionId): 未找到父终端进程，尝试 fallback")
-                DispatchQueue.main.async { self.fallbackActivateAnyTerminal() }
-                return
-            }
+            // 拿 tty（ps 是内核工具，不受 quarantine 影响）
+            let tty = self.ttyShortOfPid(sessionPid)
+            print("[CCStatus] \(sessionId): pid=\(sessionPid) tty=\(tty ?? "nil")")
+
+            // 在运行中的 app 列表找终端（不依赖父进程链）
+            let termApp = self.findRunningTerminalApp()
+            print("[CCStatus] \(sessionId): termApp=\(termApp?.bundleIdentifier ?? "nil")")
 
             DispatchQueue.main.async {
-                self.activateTerminal(termApp, ttyShort: ttyShort, sessionId: sessionId)
+                if let app = termApp {
+                    self.activateTerminal(app, ttyShort: tty, sessionId: sessionId)
+                } else {
+                    print("[CCStatus] \(sessionId): 没有运行中的终端 app")
+                }
             }
         }
     }
 
-    // MARK: - 父进程链查找
+    // MARK: - 查找运行中的终端 app
 
-    private struct TerminalMatch {
-        let app: NSRunningApplication
-        let ttyShort: String? // e.g. "ttys003"，nil 表示拿不到
-    }
-
-    /// 沿父进程链（最多 15 级）找第一个已知终端 app。
-    /// 同时顺路用 ps -o tty= 拿 session 进程自身的 tty（速度最快、最可靠）。
-    private func findTerminalApp(startingFromPid pid: Int32) -> (NSRunningApplication, String?)? {
-        let knownBundleIds: Set<String> = [
+    /// 按优先级在运行中的 app 列表查找终端，不依赖父进程链。
+    /// iTermServer 等后台服务进程不是 NSRunningApplication，但 iTerm2 主进程是。
+    private func findRunningTerminalApp() -> NSRunningApplication? {
+        let orderedBundleIds = [
             "com.googlecode.iterm2",
             "com.apple.Terminal",
-            "net.kovidgoyal.kitty",
-            "org.alacritty",
             "com.mitchellh.ghostty",
             "dev.warp.Warp-Stable",
             "dev.warp.Warp",
+            "net.kovidgoyal.kitty",
+            "org.alacritty",
             "com.github.wez.wezterm",
             "co.zeit.hyper",
         ]
-        let terminalExecKeywords = ["iterm", "terminal", "kitty", "alacritty", "ghostty", "warp", "wezterm", "hyper"]
-
-        // 先拿 session 进程的 tty（用 ps -o tty=，返回 "ttys003" 这样的短名）
-        let ttyShort = ttyShortOfPid(pid)
-
-        var currentPid = pid
-        for _ in 0..<15 {
-            guard currentPid > 1 else { break }
-
-            if let app = NSRunningApplication(processIdentifier: currentPid) {
-                let bundleId  = app.bundleIdentifier ?? ""
-                let execName  = (app.executableURL?.lastPathComponent ?? "").lowercased()
-                let isTerminal = knownBundleIds.contains(bundleId)
-                    || terminalExecKeywords.contains(where: { execName.contains($0) })
-                if isTerminal {
-                    return (app, ttyShort)
-                }
+        for bundleId in orderedBundleIds {
+            if let app = NSRunningApplication
+                .runningApplications(withBundleIdentifier: bundleId).first {
+                return app
             }
-
-            currentPid = ppidOfPid(currentPid)
         }
         return nil
     }
@@ -206,15 +188,15 @@ class StatusLightView: NSView {
     private func activateTerminal(_ app: NSRunningApplication, ttyShort: String?, sessionId: String) {
         let bundleId = app.bundleIdentifier ?? ""
 
-        // 先直接 activate：保证即使后续 AppleScript 失败，窗口也一定会出来
+        // 先 activate 保底：即使 AppleScript 失败窗口也会出来
         app.activate(options: [.activateIgnoringOtherApps])
 
         guard let tty = ttyShort, !tty.isEmpty else {
-            // 拿不到 tty 就只做 activate，已经够了
+            print("[CCStatus] \(sessionId): 无 tty，仅做 activate")
             return
         }
 
-        // iTerm2：用 AppleScript 精确把对应 session 的 tab 前置
+        // iTerm2：AppleScript 精确把对应 session 的 tab 前置
         if bundleId == "com.googlecode.iterm2" {
             let script = """
             tell application "iTerm2"
@@ -238,13 +220,12 @@ class StatusLightView: NSView {
             return
         }
 
-        // Terminal.app：用 AppleScript 把对应 tab 前置
+        // Terminal.app：AppleScript 把对应 tab 前置
         if bundleId == "com.apple.Terminal" {
             let script = """
             tell application "Terminal"
                 repeat with w in windows
-                    set tabList to tabs of w
-                    repeat with t in tabList
+                    repeat with t in tabs of w
                         try
                             if tty of t ends with "\(tty)" then
                                 set selected of t to true
@@ -263,7 +244,6 @@ class StatusLightView: NSView {
         // 其他终端（Ghostty、Warp、kitty…）：activate 已经足够
     }
 
-    /// 执行 AppleScript，打印错误但不崩溃
     private func runAppleScript(_ source: String, context: String) {
         guard let script = NSAppleScript(source: source) else { return }
         var errorDict: NSDictionary?
@@ -273,44 +253,12 @@ class StatusLightView: NSView {
         }
     }
 
-    // MARK: - Fallback
-
-    private func fallbackActivateAnyTerminal() {
-        let knownBundleIds = [
-            "com.googlecode.iterm2",
-            "com.apple.Terminal",
-            "net.kovidgoyal.kitty",
-            "org.alacritty",
-            "com.mitchellh.ghostty",
-            "dev.warp.Warp-Stable",
-            "dev.warp.Warp",
-            "com.github.wez.wezterm",
-            "co.zeit.hyper",
-        ]
-        for bundleId in knownBundleIds {
-            if let app = NSRunningApplication
-                .runningApplications(withBundleIdentifier: bundleId).first {
-                app.activate(options: [.activateIgnoringOtherApps])
-                return
-            }
-        }
-    }
-
     // MARK: - ps 工具函数
 
-    /// 用 `ps -o tty= -p <pid>` 获取进程的 tty 短名（如 "ttys003"）。
-    /// ps 是 macOS 内置系统工具，不受 Gatekeeper quarantine 影响。
     private func ttyShortOfPid(_ pid: Int32) -> String? {
         return runPs(args: ["-o", "tty=", "-p", String(pid)])
     }
 
-    /// 用 `ps -o ppid= -p <pid>` 获取父进程 PID。
-    private func ppidOfPid(_ pid: Int32) -> Int32 {
-        guard let s = runPs(args: ["-o", "ppid=", "-p", String(pid)]) else { return 0 }
-        return Int32(s) ?? 0
-    }
-
-    /// 运行 /bin/ps，返回 stdout 第一行（trim 后），失败返回 nil。
     private func runPs(args: [String]) -> String? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/ps")
@@ -324,7 +272,6 @@ class StatusLightView: NSView {
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let out = String(data: data, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            // ps 用 "??" 表示没有 tty
             return (out.isEmpty || out == "??") ? nil : out
         } catch {
             return nil
