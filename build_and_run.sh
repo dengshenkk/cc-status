@@ -3,7 +3,7 @@ set -e
 cd "$(dirname "$0")"
 
 echo "==> 停止旧进程..."
-pkill -f 'CCStatus' 2>/dev/null || true
+pkill -f CCStatus 2>/dev/null || true
 sleep 0.5
 
 echo "==> 编译..."
@@ -27,12 +27,9 @@ mkdir -p CCStatus.app/Contents/MacOS CCStatus.app/Contents/Resources
 cp cc-status CCStatus.app/Contents/MacOS/
 cp Sources/CCStatus/Info.plist CCStatus.app/Contents/
 
-# 与 CI 保持完全一致：--options runtime 让 entitlements 生效
-codesign --force --deep \
-  --sign - \
-  --entitlements entitlements.plist \
-  --options runtime \
-  CCStatus.app
+# 与 CI 一致：ad-hoc 签名，不加 --options runtime
+# 不用 Hardened Runtime，让 AppleScript 走普通 TCC 流程触发系统授权弹窗
+codesign --force --deep --sign - CCStatus.app
 echo "==> 打包成功 ✓"
 
 echo "==> 启动..."

@@ -68,7 +68,6 @@ jobs:
           cp cc-status "${APP_PATH}/Contents/MacOS/"
           chmod +x "${APP_PATH}/Contents/MacOS/cc-status"
 
-          # 替换版本号
           sed "s/<string>2.0.0<\/string>/<string>${VERSION}<\/string>/g" \
             Sources/CCStatus/Info.plist > "${APP_PATH}/Contents/Info.plist"
 
@@ -76,18 +75,16 @@ jobs:
         run: |
           APP_PATH="CCStatus.app"
 
-          # --options runtime（Hardened Runtime）是让 entitlements 生效的前提。
-          # 没有它，entitlements.plist 里的 automation.apple-events 会被系统忽略，
-          # AppleScript 控制终端的权限弹窗不会出现，点灯无响应。
+          # ad-hoc 签名，不加 --options runtime。
+          # 不用 Hardened Runtime 的原因：ad-hoc 无法公证，Hardened Runtime
+          # 下系统会静默拒绝 AppleScript 权限请求（不弹窗），导致点灯无响应。
+          # 不加 --options runtime 时走普通 TCC 流程，第一次执行 AppleScript
+          # 时系统会正常弹出"CC Status 想要控制 iTerm2"授权窗口。
           codesign --force --deep \
             --sign - \
-            --entitlements entitlements.plist \
-            --options runtime \
             "${APP_PATH}"
 
-          # 验证签名和 entitlements 都嵌进去了
           codesign --verify --verbose "${APP_PATH}"
-          codesign -d --entitlements - "${APP_PATH}"
           echo "✅ Code signing OK"
 
       - name: Create DMG
@@ -119,7 +116,6 @@ jobs:
           DMG_NAME="CC-Status-${VERSION}.dmg"
           hdiutil attach "${DMG_NAME}" -mountpoint /tmp/verify_dmg
           codesign --verify --verbose "/tmp/verify_dmg/CCStatus.app"
-          codesign -d --entitlements - "/tmp/verify_dmg/CCStatus.app"
           echo "✅ DMG verification OK"
           hdiutil detach /tmp/verify_dmg
 
@@ -133,7 +129,7 @@ jobs:
             1. 下载 DMG，打开后将 **CCStatus.app** 拖入 Applications
             2. **首次启动**：右键点击 CCStatus.app → **打开** → 在弹窗中点击"打开"
                （必须这样，否则 Gatekeeper 会阻止未公证的 app）
-            3. **首次点击状态灯**：系统会弹出"CC Status 想要控制 iTerm2/Terminal"权限请求，点击**好**
-               - 若不小心点了"不允许"，在 **系统设置 → 隐私与安全 → 自动化** 中重新勾选
+            3. **首次点击状态灯**：系统会弹出「CC Status 想要控制 iTerm2/Terminal」权限请求，点击**好**
+               - 若误点了「不允许」，在 **系统设置 → 隐私与安全 → 自动化** 中手动勾选
           files: ${{ env.DMG_NAME }}
           generate_release_notes: true
