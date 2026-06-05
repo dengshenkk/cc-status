@@ -15,7 +15,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build universal binary
         run: |
           # Build for arm64
           swiftc \
@@ -49,25 +53,75 @@ jobs:
 
           # Create universal binary
           lipo -create cc-status-arm64 cc-status-x86_64 -output cc-status
+          lipo -info cc-status
 
-      - name: Package App
+      - name: Package app bundle
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
-          mkdir -p CCStatus.app/Contents/MacOS
-          cp cc-status CCStatus.app/Contents/MacOS/
-          cp Sources/CCStatus/Info.plist CCStatus.app/Contents/
-          codesign --force --deep --sign - --entitlements entitlements.plist CCStatus.app
+          APP_NAME="CCStatus"
+          APP_PATH="${APP_NAME}.app"
+
+          mkdir -p "${APP_PATH}/Contents/MacOS"
+          mkdir -p "${APP_PATH}/Contents/Resources"
+
+          # 可执行文件
+          cp cc-status "${APP_PATH}/Contents/MacOS/"
+
+          # 使用仓库里的 Info.plist，替换版本号
+          sed "s/<string>2.0.0<\/string>/<string>${VERSION}<\/string>/g" \
+            Sources/CCStatus/Info.plist > "${APP_PATH}/Contents/Info.plist"
+
+      - name: Sign app bundle
+        run: |
+          APP_PATH="CCStatus.app"
+
+          # Ad-hoc 签名，带 entitlements 和 hardened runtime
+          codesign --force --deep \
+            --sign - \
+            --entitlements entitlements.plist \
+            --options runtime \
+            "${APP_PATH}"
+
+          # 验证签名
+          codesign --verify --verbose "${APP_PATH}"
+          echo "✅ Code signing OK"
 
       - name: Create DMG
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
-          hdiutil create -volname "CC Status" -srcfolder CCStatus.app -ov -format UDZO CC-Status.dmg
+          APP_NAME="CCStatus"
+          DMG_NAME="CC-Status-${VERSION}.dmg"
 
-      - name: Get version
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          TMP_DIR="/tmp/${APP_NAME}_dmg"
+          rm -rf "$TMP_DIR"
+          mkdir -p "$TMP_DIR"
+          cp -R "${APP_NAME}.app" "$TMP_DIR/"
+          ln -s /Applications "$TMP_DIR/Applications"
 
-      - name: Release
-        uses: softprops/action-gh-release@v1
+          hdiutil create \
+            -volname "CC Status" \
+            -srcfolder "$TMP_DIR" \
+            -ov -format UDZO \
+            "${DMG_NAME}"
+
+          rm -rf "$TMP_DIR"
+          echo "DMG_NAME=${DMG_NAME}" >> "$GITHUB_ENV"
+
+      - name: Verify DMG contents
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          DMG_NAME="CC-Status-${VERSION}.dmg"
+          hdiutil attach "${DMG_NAME}" -mountpoint /tmp/verify_dmg
+          codesign --verify --verbose "/tmp/verify_dmg/CCStatus.app"
+          echo "✅ DMG verification OK"
+          hdiutil detach /tmp/verify_dmg
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
           name: CC Status ${{ steps.version.outputs.VERSION }}
-          files: CC-Status.dmg
+          files: ${{ env.DMG_NAME }}
           generate_release_notes: true

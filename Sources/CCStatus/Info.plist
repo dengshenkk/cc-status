@@ -5,7 +5,7 @@
     <key>CFBundleExecutable</key>
     <string>cc-status</string>
     <key>CFBundleIdentifier</key>
-    <string>com.claude.cc-status</string>
+    <string>com.cc-status.cc-status</string>
     <key>CFBundleName</key>
     <string>CC Status</string>
     <key>CFBundleDisplayName</key>
