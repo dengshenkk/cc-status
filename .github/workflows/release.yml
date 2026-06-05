@@ -20,6 +20,8 @@ jobs:
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Build universal binary
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
         run: |
           # Build for arm64
           swiftc \
@@ -54,6 +56,9 @@ jobs:
           # Create universal binary
           lipo -create cc-status-arm64 cc-status-x86_64 -output cc-status
           lipo -info cc-status
+
+          # Verify deployment target
+          otool -l cc-status | grep -A2 "LC_BUILD_VERSION\|LC_VERSION_MIN_MACOSX" | head -10
 
       - name: Package app bundle
         env:
@@ -130,8 +135,13 @@ jobs:
             1. 下载 DMG，打开后将 CCStatus.app 拖入 Applications
             2. **首次启动**：右键点击 CCStatus.app → 选择"打开" → 在弹出对话框中点击"打开"
                （必须这样做，否则 macOS Gatekeeper 会阻止未经公证的 app 运行）
-            3. 首次点击灯时，系统会弹出权限请求：
-               - **自动化权限**：允许 CC Status 控制终端（iTerm2/Terminal.app）
-               - 在"系统设置 → 隐私与安全 → 自动化"中确认已勾选
+            3. **辅助功能权限**：首次点击灯时，系统会弹出"CC Status 想要控制此电脑"的权限请求，点击"允许"
+               - 或在"系统设置 → 隐私与安全 → 辅助功能"中手动添加 CCStatus.app
+
+            ## v1.2.1 更新
+
+            - 用纯 Accessibility API 实现终端窗口聚焦（不再需要自动化权限）
+            - 精确匹配 tty 对应的终端窗口
+            - 正确处理最小化窗口恢复和前置
           files: ${{ env.DMG_NAME }}
           generate_release_notes: true
