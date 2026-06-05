@@ -2,11 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- 不启用沙盒：需要读 ~/.claude/sessions、执行 lsof/ps 子进程 -->
+    <!-- 不启用沙盒：需要读 ~/.claude/sessions、执行 ps 子进程、发 AppleScript -->
     <key>com.apple.security.app-sandbox</key>
     <false/>
 
-    <!-- 允许 fork/exec 子进程（lsof、ps）-->
+    <!-- AppleScript 控制终端（iTerm2 / Terminal.app）所必需 -->
+    <!-- 配合 --options runtime 签名才会生效 -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+
+    <!-- Hardened Runtime 下允许 fork/exec 子进程（/bin/ps）-->
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>

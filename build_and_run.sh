@@ -3,7 +3,6 @@ set -e
 cd "$(dirname "$0")"
 
 echo "==> 停止旧进程..."
-pkill -f './cc-status' 2>/dev/null || true
 pkill -f 'CCStatus' 2>/dev/null || true
 sleep 0.5
 
@@ -27,7 +26,13 @@ rm -rf CCStatus.app
 mkdir -p CCStatus.app/Contents/MacOS CCStatus.app/Contents/Resources
 cp cc-status CCStatus.app/Contents/MacOS/
 cp Sources/CCStatus/Info.plist CCStatus.app/Contents/
-codesign --force --deep --sign - --entitlements entitlements.plist CCStatus.app
+
+# 与 CI 保持完全一致：--options runtime 让 entitlements 生效
+codesign --force --deep \
+  --sign - \
+  --entitlements entitlements.plist \
+  --options runtime \
+  CCStatus.app
 echo "==> 打包成功 ✓"
 
 echo "==> 启动..."
@@ -36,8 +41,5 @@ sleep 1
 
 echo "==> 检查进程..."
 pgrep -la cc-status || echo "未找到进程"
-
-echo "==> 检查 Claude Code sessions..."
-ls ~/.claude/sessions/*.json 2>/dev/null | wc -l | xargs echo "session 文件数:"
 echo ""
 echo "==> 完成！查看日志: tail -f /tmp/cc-status.log"
