@@ -78,13 +78,8 @@ class StatusLightView: NSView {
             let dx = point.x - center.x
             let dy = point.y - center.y
             if dx * dx + dy * dy <= hitRadius * hitRadius {
-                // 立即捕获 session 信息，避免异步线程读取时数据不一致
                 let session = sessions[i]
-                let pid = Int32(session.pid)
-                let sessionId = session.id
-                DispatchQueue.global(qos: .userInitiated).async {
-                    self.focusTerminal(pid: pid, sessionId: sessionId)
-                }
+                focusTerminal(for: session)
                 return
             }
         }
@@ -132,86 +127,80 @@ class StatusLightView: NSView {
 
     // MARK: - Terminal focus
 
-    private func focusTerminal(pid: Int32, sessionId: String) {
-        // 先尝试从当前进程获取 TTY
-        var tty = ttyOfProcess(pid)
-
-        // 如果当前进程没有 TTY，沿父进程链查找
-        var currentPid = pid
-        if tty == nil {
-            for _ in 0..<8 {
-                currentPid = parentPid(of: currentPid)
-                guard currentPid > 0 else { break }
-                tty = ttyOfProcess(currentPid)
-                if tty != nil { break }
-            }
-        }
-
-        if let tty = tty {
-            print("[CCStatus] session=\(sessionId): 尝试按 TTY 聚焦终端，tty=\(tty)")
-            if activateKnownTerminalByTTY(tty, sessionId: sessionId) {
-                return
-            }
-        } else {
-            print("[CCStatus] session=\(sessionId): 未找到 TTY，进入父进程 fallback")
-        }
-
-        // 重置 currentPid 用于查找终端应用，作为通用 fallback
-        currentPid = pid
-        for _ in 0..<8 {
-            guard let app = NSRunningApplication(processIdentifier: currentPid) else {
-                currentPid = parentPid(of: currentPid)
-                guard currentPid > 0 else {
-                    print("[CCStatus] session=\(sessionId): 未找到终端父进程")
-                    return
+    /// 点击灯后拉起对应终端窗口。
+    /// 策略：
+    ///   1. 从 session.pid 沿父进程链找到终端 app（NSRunningApplication）
+    ///   2. 找到后先用 NSRunningApplication.activate 直接激活（无需 AppleScript）
+    ///   3. 若激活的是 iTerm2，再补一次 AppleScript 把正确 tab 前置
+    private func focusTerminal(for session: SessionInfo) {
+        let pid = Int32(session.pid)
+        DispatchQueue.global(qos: .userInitiated).async {
+            // 沿父进程链找终端
+            if let (termApp, tty) = self.findTerminalApp(startingFrom: pid) {
+                DispatchQueue.main.async {
+                    self.activateTerminalApp(termApp, tty: tty, sessionId: session.id)
                 }
-                continue
+            } else {
+                print("[CCStatus] session=\(session.id): 未找到终端父进程")
+            }
+        }
+    }
+
+    /// 从给定 pid 出发沿父进程链，找到第一个已知终端 NSRunningApplication。
+    /// 同时尽量顺路读取 TTY（用于 iTerm2 精确 tab 定位）。
+    private func findTerminalApp(startingFrom pid: Int32) -> (NSRunningApplication, String?)? {
+        let knownBundleIds: Set<String> = [
+            "com.googlecode.iterm2",
+            "com.apple.Terminal",
+            "net.kovidgoyal.kitty",
+            "org.alacritty",
+            "com.mitchellh.ghostty",
+            "dev.warp.Warp-Stable",
+            "dev.warp.Warp",
+            "com.github.wez.wezterm",
+            "co.zeit.hyper",
+        ]
+        let terminalKeywords = ["terminal", "iterm", "kitty", "alacritty", "ghostty", "warp", "wezterm", "hyper"]
+
+        var currentPid = pid
+        var tty: String? = nil
+
+        for _ in 0..<12 {
+            guard currentPid > 0 else { break }
+
+            // 顺路收集 TTY（不中断流程）
+            if tty == nil, let t = ttyOfProcess(currentPid) {
+                tty = t
             }
 
-            let bundleId = app.bundleIdentifier ?? ""
-            let execName = (app.executableURL?.lastPathComponent ?? "").lowercased()
-
-            let knownTerminals = [
-                "com.googlecode.iterm2",
-                "com.apple.Terminal",
-                "com.apple.terminal",
-                "net.kovidgoyal.kitty",
-                "org.alacritty",
-                "com.mitchellh.ghostty",
-                "dev.warp.Warp-Stable", "dev.warp.Warp",
-                "com.github.wez.wezterm",
-                "co.zeit.hyper"
-            ]
-            let terminalKeywords = ["terminal", "iterm", "kitty", "alacritty", "ghostty", "warp", "wezterm", "hyper"]
-
-            let isTerminal = knownTerminals.contains(bundleId) ||
-                terminalKeywords.contains(where: { execName.contains($0) })
-
-            if isTerminal {
-                activateTerminalWindow(bundleId: bundleId, tty: tty, sessionId: sessionId)
-                return
+            if let app = NSRunningApplication(processIdentifier: currentPid) {
+                let bundleId = app.bundleIdentifier ?? ""
+                let execName = (app.executableURL?.lastPathComponent ?? "").lowercased()
+                let isTerminal = knownBundleIds.contains(bundleId) ||
+                    terminalKeywords.contains(where: { execName.contains($0) })
+                if isTerminal {
+                    return (app, tty)
+                }
             }
 
             currentPid = parentPid(of: currentPid)
-            guard currentPid > 0 else {
-                print("[CCStatus] session=\(sessionId): 未找到终端父进程")
-                return
-            }
         }
-        print("[CCStatus] session=\(sessionId): 查找终端失败，pid=\(pid)")
+        return nil
     }
 
-    private func activateKnownTerminalByTTY(_ tty: String, sessionId: String) -> Bool {
-        let ttyName = tty.replacingOccurrences(of: "/dev/", with: "")
-        guard !ttyName.isEmpty else { return false }
+    /// 激活终端 app，对 iTerm2 额外尝试 AppleScript 精确定位 tab。
+    private func activateTerminalApp(_ app: NSRunningApplication, tty: String?, sessionId: String) {
+        let bundleId = app.bundleIdentifier ?? ""
 
-        let runningBundleIds = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleIdentifier })
+        // 先直接 activate，保证窗口一定能拉起（即使后续 AppleScript 失败）
+        app.activate(options: [.activateIgnoringOtherApps])
 
-        if runningBundleIds.contains("com.googlecode.iterm2") {
-            print("[CCStatus] session=\(sessionId): iTerm2 正在运行，尝试 AppleScript 匹配 tty=\(ttyName)")
+        // iTerm2：尝试用 AppleScript 把对应 session 的 tab 前置
+        if bundleId == "com.googlecode.iterm2", let tty = tty {
+            let ttyName = tty.replacingOccurrences(of: "/dev/", with: "")
+            guard !ttyName.isEmpty else { return }
             let script = """
             tell application "iTerm2"
-                set found to false
                 repeat with w in windows
                     repeat with t in tabs of w
                         repeat with s in sessions of t
@@ -220,155 +209,57 @@ class StatusLightView: NSView {
                                     select s
                                     select t
                                     set index of w to 1
-                                    set found to true
                                     exit repeat
                                 end if
                             end try
                         end repeat
-                        if found then exit repeat
                     end repeat
-                    if found then exit repeat
                 end repeat
-                if found then activate
-                return found
             end tell
             """
-            if executeAppleScript(script, sessionId: sessionId) {
-                return true
-            }
-        } else {
-            print("[CCStatus] session=\(sessionId): iTerm2 未运行")
-        }
-
-        if runningBundleIds.contains("com.apple.Terminal") || runningBundleIds.contains("com.apple.terminal") {
-            let script = """
-            tell application "Terminal"
-                set found to false
-                repeat with w in windows
-                    repeat with t in tabs of w
-                        try
-                            if tty of t contains "\(ttyName)" then
-                                set selected of t to true
-                                set index of w to 1
-                                set found to true
-                                exit repeat
-                            end if
-                        end try
-                    end repeat
-                    if found then exit repeat
-                end repeat
-                if found then activate
-                return found
-            end tell
-            """
-            if executeAppleScript(script, sessionId: sessionId) {
-                return true
-            }
-        }
-
-        print("[CCStatus] session=\(sessionId): 未按 TTY 找到终端窗口，tty=\(tty)")
-        return false
-    }
-
-    private func activateTerminalWindow(bundleId: String, tty: String?, sessionId: String) {
-        let ttyName = tty?.replacingOccurrences(of: "/dev/", with: "") ?? ""
-
-        let script: String
-        if bundleId == "com.googlecode.iterm2" && !ttyName.isEmpty {
-            script = """
-            tell application "iTerm2"
-                set found to false
-                repeat with w in windows
-                    repeat with t in tabs of w
-                        repeat with s in sessions of t
-                            try
-                                if tty of s contains "\(ttyName)" then
-                                    select s
-                                    select t
-                                    set index of w to 1
-                                    set found to true
-                                    exit repeat
-                                end if
-                            end try
-                        end repeat
-                        if found then exit repeat
-                    end repeat
-                    if found then exit repeat
-                end repeat
-                if found then activate
-            end tell
-            """
-        } else if (bundleId == "com.apple.Terminal" || bundleId == "com.apple.terminal") && !ttyName.isEmpty {
-            script = """
-            tell application "Terminal"
-                set found to false
-                repeat with w in windows
-                    repeat with t in tabs of w
-                        try
-                            if tty of t contains "\(ttyName)" then
-                                set selected of t to true
-                                set index of w to 1
-                                set found to true
-                                exit repeat
-                            end if
-                        end try
-                    end repeat
-                    if found then exit repeat
-                end repeat
-                if found then activate
-            end tell
-            """
-        } else {
-            guard !bundleId.isEmpty else {
-                print("[CCStatus] session=\(sessionId): 终端进程缺少 bundleId，无法通用激活")
-                return
-            }
-            script = """
-            tell application id "\(bundleId)"
-                activate
-                try
-                    set miniaturized of every window to false
-                end try
-            end tell
-            """
-        }
-
-        DispatchQueue.main.async {
             if let appleScript = NSAppleScript(source: script) {
-                var error: NSDictionary?
-                appleScript.executeAndReturnError(&error)
-                if let err = error {
-                    print("[CCStatus] session=\(sessionId): AppleScript 执行失败: \(err)")
+                var err: NSDictionary?
+                appleScript.executeAndReturnError(&err)
+                if let err = err {
+                    print("[CCStatus] session=\(sessionId): iTerm2 AppleScript err: \(err)")
+                }
+            }
+            return
+        }
+
+        // Terminal.app：尝试 AppleScript 定位 tab
+        if (bundleId == "com.apple.Terminal" || bundleId == "com.apple.terminal"), let tty = tty {
+            let ttyName = tty.replacingOccurrences(of: "/dev/", with: "")
+            guard !ttyName.isEmpty else { return }
+            let script = """
+            tell application "Terminal"
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        try
+                            if tty of t contains "\(ttyName)" then
+                                set selected of t to true
+                                set index of w to 1
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                end repeat
+            end tell
+            """
+            if let appleScript = NSAppleScript(source: script) {
+                var err: NSDictionary?
+                appleScript.executeAndReturnError(&err)
+                if let err = err {
+                    print("[CCStatus] session=\(sessionId): Terminal AppleScript err: \(err)")
                 }
             }
         }
+        // 其他终端（Ghostty, Warp, kitty…）：activate 已经够了
     }
 
-    /// 同步执行 AppleScript 并返回布尔结果，用于判断是否成功找到并聚焦终端窗口
-    private func executeAppleScript(_ source: String, sessionId: String) -> Bool {
-        var result = false
-        let semaphore = DispatchSemaphore(value: 0)
+    // MARK: - System helpers
 
-        DispatchQueue.main.async {
-            if let appleScript = NSAppleScript(source: source) {
-                var error: NSDictionary?
-                let output = appleScript.executeAndReturnError(&error)
-                if let err = error {
-                    print("[CCStatus] session=\(sessionId): AppleScript 执行失败: \(err)")
-                } else {
-                    result = output.booleanValue
-                    print("[CCStatus] session=\(sessionId): AppleScript 返回 result=\(result)")
-                }
-            } else {
-                print("[CCStatus] session=\(sessionId): 无法创建 NSAppleScript")
-            }
-            semaphore.signal()
-        }
-
-        semaphore.wait()
-        return result
-    }
-
+    /// 通过 lsof 找进程持有的 TTY 设备路径
     private func ttyOfProcess(_ pid: Int32) -> String? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
@@ -390,6 +281,7 @@ class StatusLightView: NSView {
         return nil
     }
 
+    /// 通过 ps 获取父进程 PID
     private func parentPid(of pid: Int32) -> Int32 {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/ps")

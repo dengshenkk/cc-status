@@ -27,8 +27,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // 默认显示窗口：未曾设置过时返回 true
     private var showWindow: Bool {
-        get { UserDefaults.standard.bool(forKey: "ShowWindow") }
+        get {
+            let v = UserDefaults.standard.object(forKey: "ShowWindow")
+            return v == nil ? true : UserDefaults.standard.bool(forKey: "ShowWindow")
+        }
         set {
             UserDefaults.standard.set(newValue, forKey: "ShowWindow")
             applyWindowVisibility()
