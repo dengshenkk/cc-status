@@ -8,6 +8,11 @@ class StatusLightView: NSView {
         didSet { needsDisplay = true }
     }
 
+    // Colors matching the spec:
+    // Running: Green solid
+    // Idle: Yellow flash
+    // Done: Green flash
+    // Interrupted: Red solid
     private let greenColor  = NSColor(red: 0.2,  green: 0.85, blue: 0.3,  alpha: 1.0)
     private let yellowColor = NSColor(red: 1.0,  green: 0.80, blue: 0.0,  alpha: 1.0)
     private let redColor    = NSColor(red: 0.95, green: 0.2,  blue: 0.15, alpha: 1.0)

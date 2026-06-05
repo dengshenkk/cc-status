@@ -1,6 +1,1 @@
-.DS_Store
-cc-status
-CCStatus.app/
-CC-Status.dmg
-*.o
-*.d
+Nothing should be ignored based on the provided file changes. The only modified file is a Swift source code file (`Sources/CCStatus/StatusLightView.swift`), which is not a build artifact, dependency, or temporary file.
