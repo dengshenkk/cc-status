@@ -1,8 +1,8 @@
 {
-  "task": "修复点击灯后终端不拉起 + 创建 GitHub CI/CD",
-  "current_step": "完成",
+  "task": "点击状态灯精确聚焦对应终端窗口（含后台/最小化），方案A：纯 AppleScript 重写 iTerm2 + Terminal.app",
+  "current_step": "提交 git 并发布新版本",
   "status": "done",
-  "progress": "修复验证通过，已提交修复；已创建 GitHub Actions workflow；已推送到 GitHub。",
-  "last_update": "2026-06-04",
+  "progress": "修复完成并验证通过：多窗口切换精确 / 最小化恢复单个窗口 / 恢复后稳定前置 / 后台遮挡能 raise",
+  "last_update": "2026-06-05",
   "error": ""
 }

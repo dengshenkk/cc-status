@@ -127,25 +127,18 @@ class StatusLightView: NSView {
 
     // MARK: - Terminal focus
 
-    /// 点击灯后拉起对应终端窗口。
-    /// 策略：
-    ///   1. 从 session.pid 沿父进程链找到终端 app（NSRunningApplication）
-    ///   2. 找到后先用 NSRunningApplication.activate 直接激活（无需 AppleScript）
-    ///   3. 若激活的是 iTerm2/Terminal.app，再补一次 AppleScript 把正确 tab 前置
+    /// 点击灯后精确拉起对应终端窗口。
+    /// 策略（修复 iTerm2 用 iTermServer 托管 shell、GUI 进程不在父进程链上导致定位失败的问题）：
+    ///   1. 直接读取 claude 进程的 TTY（不依赖父进程链找 GUI app）
+    ///   2. 对运行中的已知终端（iTerm2 / Terminal.app）逐个跑 AppleScript 按 TTY 匹配，
+    ///      命中后：取消最小化 → 选中 session/tab → 前置窗口 → activate
+    ///   3. 都没命中再退化到父进程链 / 任意终端激活
     private func focusTerminal(for session: SessionInfo) {
         let pid = Int32(session.pid)
         DispatchQueue.global(qos: .userInitiated).async {
-            // 沿父进程链找终端
-            if let (termApp, tty) = self.findTerminalApp(startingFrom: pid) {
-                DispatchQueue.main.async {
-                    self.activateTerminalApp(termApp, tty: tty, sessionId: session.id)
-                }
-            } else {
-                // fallback：pid 不在任何终端下时，尝试激活所有已知终端
-                print("[CCStatus] session=\(session.id): 未找到终端父进程，尝试 fallback")
-                DispatchQueue.main.async {
-                    self.fallbackActivateAnyTerminal()
-                }
+            let tty = self.ttyOfProcess(pid)
+            DispatchQueue.main.async {
+                self.activateTerminal(tty: tty, fallbackPid: pid, sessionId: session.id)
             }
         }
     }
@@ -165,7 +158,7 @@ class StatusLightView: NSView {
         ]
         for bundleId in knownBundleIds {
             if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first {
-                app.activate(options: [.activateIgnoringOtherApps])
+                app.activate()
                 return
             }
         }
@@ -213,74 +206,160 @@ class StatusLightView: NSView {
         return nil
     }
 
-    /// 激活终端 app，对 iTerm2/Terminal.app 额外尝试 AppleScript 精确定位 tab。
-    private func activateTerminalApp(_ app: NSRunningApplication, tty: String?, sessionId: String) {
-        let bundleId = app.bundleIdentifier ?? ""
-
-        // 先直接 activate，保证窗口一定能拉起（即使后续 AppleScript 失败）
-        // 注意：从 DMG 启动的 app 第一次调用时系统会弹出自动化权限请求
-        app.activate(options: [.activateIgnoringOtherApps])
-
-        // iTerm2：尝试用 AppleScript 把对应 session 的 tab 前置
-        if bundleId == "com.googlecode.iterm2", let tty = tty {
+    /// 根据 TTY 精确聚焦终端窗口，失败则逐级降级。
+    private func activateTerminal(tty: String?, fallbackPid: Int32, sessionId: String) {
+        // 1. 有 TTY：对运行中的已知终端按 TTY 精确匹配聚焦
+        if let tty = tty {
             let ttyName = tty.replacingOccurrences(of: "/dev/", with: "")
-            guard !ttyName.isEmpty else { return }
-            let script = """
-            tell application "iTerm2"
-                repeat with w in windows
-                    repeat with t in tabs of w
-                        repeat with s in sessions of t
-                            try
-                                if tty of s contains "\(ttyName)" then
-                                    select s
-                                    select t
-                                    set index of w to 1
-                                    exit repeat
-                                end if
-                            end try
-                        end repeat
-                    end repeat
-                end repeat
-            end tell
-            """
-            if let appleScript = NSAppleScript(source: script) {
-                var err: NSDictionary?
-                appleScript.executeAndReturnError(&err)
-                if let err = err {
-                    print("[CCStatus] session=\(sessionId): iTerm2 AppleScript err: \(err)")
+            if !ttyName.isEmpty {
+                if isAppRunning("com.googlecode.iterm2"),
+                   focusITerm2(ttyName: ttyName, sessionId: sessionId) {
+                    return
+                }
+                if isAppRunning("com.apple.Terminal"),
+                   focusTerminalApp(ttyName: ttyName, sessionId: sessionId) {
+                    return
                 }
             }
+        }
+
+        // 2. 降级：沿父进程链找 GUI 终端（覆盖 Ghostty/Warp/kitty 等非 server 架构终端）
+        if let (app, _) = findTerminalApp(startingFrom: fallbackPid) {
+            app.activate()
             return
         }
 
-        // Terminal.app：尝试 AppleScript 定位 tab
-        if (bundleId == "com.apple.Terminal" || bundleId == "com.apple.terminal"), let tty = tty {
-            let ttyName = tty.replacingOccurrences(of: "/dev/", with: "")
-            guard !ttyName.isEmpty else { return }
-            let script = """
-            tell application "Terminal"
-                repeat with w in windows
-                    repeat with t in tabs of w
+        // 3. 兜底：激活任意已知终端
+        print("[CCStatus] session=\(sessionId): TTY/父进程均未命中，fallback 激活任意终端")
+        fallbackActivateAnyTerminal()
+    }
+
+    /// iTerm2：按 TTY 匹配 session → 取消最小化 → 记录 bounds，
+    /// 再用 System Events 按 position 匹配执行：AXRaise + AXMain + AXFocused + frontmost。
+    /// 注意：不能用 iTerm2 的 activate（会恢复所有最小化窗口），必须用 System Events 精确激活。
+    /// 返回是否命中目标 session。
+    private func focusITerm2(ttyName: String, sessionId: String) -> Bool {
+        let script = """
+        tell application "iTerm2"
+            set matched to false
+            set tx to -99999
+            set ty to -99999
+            repeat with w in windows
+                repeat with t in tabs of w
+                    repeat with s in sessions of t
                         try
-                            if tty of t contains "\(ttyName)" then
-                                set selected of t to true
-                                set index of w to 1
-                                exit repeat
+                            if tty of s contains "\(ttyName)" then
+                                set miniaturized of w to false
+                                select s
+                                set b to bounds of w
+                                set tx to (item 1 of b)
+                                set ty to (item 2 of b)
+                                set matched to true
                             end if
                         end try
                     end repeat
                 end repeat
+            end repeat
+        end tell
+        if matched then
+            delay 0.3
+            tell application "System Events"
+                if exists (process "iTerm2") then
+                    tell process "iTerm2"
+                        set frontmost to true
+                        repeat with win in windows
+                            try
+                                set p to position of win
+                                if (item 1 of p) = tx and (item 2 of p) = ty then
+                                    perform action "AXRaise" of win
+                                    try
+                                        set value of attribute "AXMain" of win to true
+                                    end try
+                                    try
+                                        set value of attribute "AXFocused" of win to true
+                                    end try
+                                end if
+                            end try
+                        end repeat
+                    end tell
+                end if
             end tell
-            """
-            if let appleScript = NSAppleScript(source: script) {
-                var err: NSDictionary?
-                appleScript.executeAndReturnError(&err)
-                if let err = err {
-                    print("[CCStatus] session=\(sessionId): Terminal AppleScript err: \(err)")
-                }
-            }
+        end if
+        return matched
+        """
+        return runAppleScriptReturningBool(script, label: "iTerm2", sessionId: sessionId)
+    }
+
+    /// Terminal.app：按 TTY 匹配 tab → 取消最小化 → 选中 tab → 前置 → activate，
+    /// 再用 System Events 的 AXRaise（按窗口左上角坐标匹配）强制前置兜底。
+    /// 返回是否命中目标 tab。
+    private func focusTerminalApp(ttyName: String, sessionId: String) -> Bool {
+        let script = """
+        tell application "Terminal"
+            set matched to false
+            set tx to -99999
+            set ty to -99999
+            repeat with w in windows
+                repeat with t in tabs of w
+                    try
+                        if tty of t contains "\(ttyName)" then
+                            set miniaturized of w to false
+                            set selected of t to true
+                            set frontmost of w to true
+                            set b to bounds of w
+                            set tx to (item 1 of b)
+                            set ty to (item 2 of b)
+                            set matched to true
+                        end if
+                    end try
+                end repeat
+            end repeat
+            if matched then activate
+        end tell
+        if matched then
+            delay 0.3
+            tell application "System Events"
+                if exists (process "Terminal") then
+                    tell process "Terminal"
+                        set frontmost to true
+                        repeat with win in windows
+                            try
+                                set p to position of win
+                                if (item 1 of p) = tx and (item 2 of p) = ty then
+                                    perform action "AXRaise" of win
+                                    try
+                                        set value of attribute "AXMain" of win to true
+                                    end try
+                                    try
+                                        set value of attribute "AXFocused" of win to true
+                                    end try
+                                end if
+                            end try
+                        end repeat
+                    end tell
+                end if
+            end tell
+        end if
+        return matched
+        """
+        return runAppleScriptReturningBool(script, label: "Terminal", sessionId: sessionId)
+    }
+
+    /// 判断指定 bundleId 的 app 是否在运行
+    private func isAppRunning(_ bundleId: String) -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).isEmpty
+    }
+
+    /// 执行 AppleScript 并返回其布尔结果（脚本出错或非布尔返回时为 false）
+    private func runAppleScriptReturningBool(_ source: String, label: String, sessionId: String) -> Bool {
+        guard let script = NSAppleScript(source: source) else { return false }
+        var err: NSDictionary?
+        let result = script.executeAndReturnError(&err)
+        if let err = err {
+            print("[CCStatus] session=\(sessionId): \(label) AppleScript err: \(err)")
+            return false
         }
-        // 其他终端（Ghostty, Warp, kitty…）：activate 已经够了
+        return result.booleanValue
     }
 
     // MARK: - System helpers
