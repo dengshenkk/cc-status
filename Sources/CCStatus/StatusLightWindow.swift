@@ -36,6 +36,18 @@ class StatusLightWindow: NSWindow {
 
         lightView = StatusLightView(frame: NSRect(origin: .zero, size: initialSize))
         contentView = lightView
+
+        // 确保在所有 Space 上显示，包括从 DMG 直接运行的情况
+        // 不在 init 里 orderFront，由调用方（AppDelegate）负责显示时机
+    }
+
+    // MARK: - Show
+
+    /// 显示窗口。必须在主线程调用，且 NSApp 已完成 launch 之后。
+    func show() {
+        // 强制把窗口推到正确 level，防止从 DMG 启动时被系统压到后面
+        level = .floating
+        orderFrontRegardless()
     }
 
     // MARK: - Size calculation

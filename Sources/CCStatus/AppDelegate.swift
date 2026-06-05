@@ -46,7 +46,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         monitor = SessionMonitor()
         setupMenuBar()
 
-        if showWindow { setupLightWindow() }
+        if showWindow {
+            // 用 async 确保 NSApp 完全完成 launch 流程后再显示窗口
+            // 修复从 DMG 直接拖入运行时窗口不出现的问题
+            DispatchQueue.main.async { [weak self] in
+                self?.setupLightWindow()
+            }
+        }
 
         // 10fps 轮询，足够响应及时又不占 CPU
         timer = Timer(timeInterval: 0.1, target: self,
@@ -88,7 +94,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupLightWindow() {
         lightWindow = StatusLightWindow()
         lightWindow?.isVertical = isVertical
-        lightWindow?.makeKeyAndOrderFront(nil)
+        // 用 show() 而非 makeKeyAndOrderFront，避免 accessory app 抢焦点失败导致窗口不显示
+        lightWindow?.show()
     }
 
     // MARK: - Actions
@@ -111,7 +118,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func applyWindowVisibility() {
         if showWindow {
             if lightWindow == nil { setupLightWindow() }
-            lightWindow?.makeKeyAndOrderFront(nil)
+            lightWindow?.show()
         } else {
             lightWindow?.orderOut(nil)
         }

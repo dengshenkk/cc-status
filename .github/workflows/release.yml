@@ -67,6 +67,7 @@ jobs:
 
           # 可执行文件
           cp cc-status "${APP_PATH}/Contents/MacOS/"
+          chmod +x "${APP_PATH}/Contents/MacOS/cc-status"
 
           # 使用仓库里的 Info.plist，替换版本号
           sed "s/<string>2.0.0<\/string>/<string>${VERSION}<\/string>/g" \
@@ -76,11 +77,11 @@ jobs:
         run: |
           APP_PATH="CCStatus.app"
 
-          # Ad-hoc 签名，带 entitlements 和 hardened runtime
+          # Ad-hoc 签名（不带 --options runtime，避免 Hardened Runtime
+          # 在 Gatekeeper 隔离下阻断 AppleScript / lsof / ps 子进程调用）
           codesign --force --deep \
             --sign - \
             --entitlements entitlements.plist \
-            --options runtime \
             "${APP_PATH}"
 
           # 验证签名
@@ -123,5 +124,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: CC Status ${{ steps.version.outputs.VERSION }}
+          body: |
+            ## 安装说明
+
+            1. 下载 DMG，打开后将 CCStatus.app 拖入 Applications
+            2. **首次启动**：右键点击 CCStatus.app → 选择"打开" → 在弹出对话框中点击"打开"
+               （必须这样做，否则 macOS Gatekeeper 会阻止未经公证的 app 运行）
+            3. 首次点击灯时，系统会弹出权限请求：
+               - **自动化权限**：允许 CC Status 控制终端（iTerm2/Terminal.app）
+               - 在"系统设置 → 隐私与安全 → 自动化"中确认已勾选
           files: ${{ env.DMG_NAME }}
           generate_release_notes: true

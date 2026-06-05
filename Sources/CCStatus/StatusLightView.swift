@@ -131,7 +131,7 @@ class StatusLightView: NSView {
     /// 策略：
     ///   1. 从 session.pid 沿父进程链找到终端 app（NSRunningApplication）
     ///   2. 找到后先用 NSRunningApplication.activate 直接激活（无需 AppleScript）
-    ///   3. 若激活的是 iTerm2，再补一次 AppleScript 把正确 tab 前置
+    ///   3. 若激活的是 iTerm2/Terminal.app，再补一次 AppleScript 把正确 tab 前置
     private func focusTerminal(for session: SessionInfo) {
         let pid = Int32(session.pid)
         DispatchQueue.global(qos: .userInitiated).async {
@@ -141,7 +141,32 @@ class StatusLightView: NSView {
                     self.activateTerminalApp(termApp, tty: tty, sessionId: session.id)
                 }
             } else {
-                print("[CCStatus] session=\(session.id): 未找到终端父进程")
+                // fallback：pid 不在任何终端下时，尝试激活所有已知终端
+                print("[CCStatus] session=\(session.id): 未找到终端父进程，尝试 fallback")
+                DispatchQueue.main.async {
+                    self.fallbackActivateAnyTerminal()
+                }
+            }
+        }
+    }
+
+    /// 找不到父终端时，激活当前运行中的任意终端 app（最后手段）
+    private func fallbackActivateAnyTerminal() {
+        let knownBundleIds = [
+            "com.googlecode.iterm2",
+            "com.apple.Terminal",
+            "net.kovidgoyal.kitty",
+            "org.alacritty",
+            "com.mitchellh.ghostty",
+            "dev.warp.Warp-Stable",
+            "dev.warp.Warp",
+            "com.github.wez.wezterm",
+            "co.zeit.hyper",
+        ]
+        for bundleId in knownBundleIds {
+            if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first {
+                app.activate(options: [.activateIgnoringOtherApps])
+                return
             }
         }
     }
@@ -188,11 +213,12 @@ class StatusLightView: NSView {
         return nil
     }
 
-    /// 激活终端 app，对 iTerm2 额外尝试 AppleScript 精确定位 tab。
+    /// 激活终端 app，对 iTerm2/Terminal.app 额外尝试 AppleScript 精确定位 tab。
     private func activateTerminalApp(_ app: NSRunningApplication, tty: String?, sessionId: String) {
         let bundleId = app.bundleIdentifier ?? ""
 
         // 先直接 activate，保证窗口一定能拉起（即使后续 AppleScript 失败）
+        // 注意：从 DMG 启动的 app 第一次调用时系统会弹出自动化权限请求
         app.activate(options: [.activateIgnoringOtherApps])
 
         // iTerm2：尝试用 AppleScript 把对应 session 的 tab 前置
@@ -261,9 +287,13 @@ class StatusLightView: NSView {
 
     /// 通过 lsof 找进程持有的 TTY 设备路径
     private func ttyOfProcess(_ pid: Int32) -> String? {
+        // 使用绝对路径，防止 PATH 在某些运行环境下不完整
+        let lsofPath = "/usr/sbin/lsof"
+        guard FileManager.default.fileExists(atPath: lsofPath) else { return nil }
+
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        task.arguments = ["-p", String(pid)]
+        task.executableURL = URL(fileURLWithPath: lsofPath)
+        task.arguments = ["-p", String(pid), "-a", "-d", "0,1,2"]
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice
@@ -277,7 +307,9 @@ class StatusLightView: NSView {
                     if let last = line.split(separator: " ").last { return String(last) }
                 }
             }
-        } catch {}
+        } catch {
+            print("[CCStatus] lsof error for pid \(pid): \(error)")
+        }
         return nil
     }
 
