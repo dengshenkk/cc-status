@@ -1,5 +1,21 @@
 import AppKit
 
+// 写到文件，不管用什么方式启动都能看到日志
+private func ccLog(_ msg: String) {
+    let line = "\(Date()) \(msg)\n"
+    if let data = line.data(using: .utf8) {
+        let path = "/tmp/cc-status.log"
+        if FileManager.default.fileExists(atPath: path),
+           let fh = FileHandle(forWritingAtPath: path) {
+            fh.seekToEndOfFile()
+            fh.write(data)
+            fh.closeFile()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+}
+
 class StatusLightView: NSView {
     private var sessions: [SessionInfo] = []
     private var blinkPhase: Bool = true
@@ -126,13 +142,6 @@ class StatusLightView: NSView {
 
     // MARK: - Terminal focus
 
-    /// 点击灯后拉起对应终端窗口。
-    ///
-    /// 策略：
-    /// 1. 用 ps -o tty= 拿到 session 进程的 tty（如 "ttys003"）
-    /// 2. 在正在运行的 app 列表里找已知终端（不走父进程链，因为 iTermServer 不是 GUI app）
-    /// 3. activate() 保证窗口出来
-    /// 4. 对 iTerm2 / Terminal.app 用 AppleScript 按 tty 精确前置对应 tab
     private func focusTerminal(for session: SessionInfo) {
         let sessionPid = Int32(session.pid)
         let sessionId  = session.id
@@ -140,19 +149,17 @@ class StatusLightView: NSView {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
-            // 拿 tty（ps 是内核工具，不受 quarantine 影响）
             let tty = self.ttyShortOfPid(sessionPid)
-            print("[CCStatus] \(sessionId): pid=\(sessionPid) tty=\(tty ?? "nil")")
+            ccLog("click: sessionId=\(sessionId) pid=\(sessionPid) tty=\(tty ?? "nil")")
 
-            // 在运行中的 app 列表找终端（不依赖父进程链）
             let termApp = self.findRunningTerminalApp()
-            print("[CCStatus] \(sessionId): termApp=\(termApp?.bundleIdentifier ?? "nil")")
+            ccLog("click: termApp=\(termApp?.bundleIdentifier ?? "nil")")
 
             DispatchQueue.main.async {
                 if let app = termApp {
                     self.activateTerminal(app, ttyShort: tty, sessionId: sessionId)
                 } else {
-                    print("[CCStatus] \(sessionId): 没有运行中的终端 app")
+                    ccLog("click: 没有运行中的终端 app")
                 }
             }
         }
@@ -160,8 +167,6 @@ class StatusLightView: NSView {
 
     // MARK: - 查找运行中的终端 app
 
-    /// 按优先级在运行中的 app 列表查找终端，不依赖父进程链。
-    /// iTermServer 等后台服务进程不是 NSRunningApplication，但 iTerm2 主进程是。
     private func findRunningTerminalApp() -> NSRunningApplication? {
         let orderedBundleIds = [
             "com.googlecode.iterm2",
@@ -188,39 +193,44 @@ class StatusLightView: NSView {
     private func activateTerminal(_ app: NSRunningApplication, ttyShort: String?, sessionId: String) {
         let bundleId = app.bundleIdentifier ?? ""
 
-        // 先 activate 保底：即使 AppleScript 失败窗口也会出来
         app.activate(options: [.activateIgnoringOtherApps])
 
         guard let tty = ttyShort, !tty.isEmpty else {
-            print("[CCStatus] \(sessionId): 无 tty，仅做 activate")
+            ccLog("activate: 无 tty，仅做 activate")
             return
         }
 
-        // iTerm2：AppleScript 精确把对应 session 的 tab 前置
         if bundleId == "com.googlecode.iterm2" {
             let script = """
             tell application "iTerm2"
+                set matchFound to false
                 repeat with w in windows
                     repeat with t in tabs of w
                         repeat with s in sessions of t
                             try
-                                if tty of s ends with "\(tty)" then
+                                set sTTY to tty of s
+                                if sTTY ends with "\(tty)" then
                                     select s
                                     select t
                                     set index of w to 1
+                                    set matchFound to true
                                     exit repeat
                                 end if
                             end try
                         end repeat
+                        if matchFound then exit repeat
                     end repeat
+                    if matchFound then exit repeat
                 end repeat
+                return matchFound
             end tell
             """
-            runAppleScript(script, context: "iTerm2 \(sessionId)")
+            ccLog("AppleScript: iTerm2 tty=\(tty)")
+            let result = runAppleScript(script, context: "iTerm2 \(sessionId)")
+            ccLog("AppleScript: result=\(result ?? "nil")")
             return
         }
 
-        // Terminal.app：AppleScript 把对应 tab 前置
         if bundleId == "com.apple.Terminal" {
             let script = """
             tell application "Terminal"
@@ -237,20 +247,38 @@ class StatusLightView: NSView {
                 end repeat
             end tell
             """
+            ccLog("AppleScript: Terminal tty=\(tty)")
             runAppleScript(script, context: "Terminal \(sessionId)")
             return
         }
-
-        // 其他终端（Ghostty、Warp、kitty…）：activate 已经足够
     }
 
-    private func runAppleScript(_ source: String, context: String) {
-        guard let script = NSAppleScript(source: source) else { return }
-        var errorDict: NSDictionary?
-        script.executeAndReturnError(&errorDict)
-        if let err = errorDict {
-            print("[CCStatus] AppleScript[\(context)] error: \(err)")
+    // 返回脚本执行结果字符串，方便调试
+    @discardableResult
+    private func runAppleScript(_ source: String, context: String) -> String? {
+        guard let script = NSAppleScript(source: source) else {
+            ccLog("AppleScript[\(context)]: NSAppleScript init failed")
+            return nil
         }
+        var errorDict: NSDictionary?
+        let result = script.executeAndReturnError(&errorDict)
+        if let err = errorDict {
+            ccLog("AppleScript[\(context)]: ERROR \(err)")
+
+            // 检测是否为权限被拒绝错误 (Apple Events 权限)
+            // 错误码 -1743: 不是授权进程 (kAENotAuthorized)
+            // 错误码 -1744: 权限被拒绝
+            if let errNumber = err["NSAppleScriptErrorNumber"] as? Int {
+                if errNumber == -1743 || errNumber == -1744 {
+                    ccLog("AppleScript[\(context)]: 权限被拒绝，显示引导面板")
+                    DispatchQueue.main.async {
+                        PermissionGuidePanel.showGuide()
+                    }
+                }
+            }
+            return nil
+        }
+        return result.stringValue
     }
 
     // MARK: - ps 工具函数

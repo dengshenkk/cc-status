@@ -27,7 +27,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // 默认显示窗口：未曾设置过时返回 true
     private var showWindow: Bool {
         get {
             let v = UserDefaults.standard.object(forKey: "ShowWindow")
@@ -46,15 +45,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         monitor = SessionMonitor()
         setupMenuBar()
 
+        // 首次启动检测 quarantine
+        checkQuarantineStatus()
+
         if showWindow {
-            // 用 async 确保 NSApp 完全完成 launch 流程后再显示窗口
-            // 修复从 DMG 直接拖入运行时窗口不出现的问题
             DispatchQueue.main.async { [weak self] in
                 self?.setupLightWindow()
             }
         }
 
-        // 10fps 轮询，足够响应及时又不占 CPU
         timer = Timer(timeInterval: 0.1, target: self,
                       selector: #selector(tick), userInfo: nil, repeats: true)
         RunLoop.main.add(timer!, forMode: .common)
@@ -87,6 +86,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(launchItem)
 
         menu.addItem(.separator())
+
+        let authItem = NSMenuItem(title: "重新授权...", action: #selector(showPermissionGuide(_:)), keyEquivalent: "")
+        menu.addItem(authItem)
+
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
     }
@@ -94,7 +98,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupLightWindow() {
         lightWindow = StatusLightWindow()
         lightWindow?.isVertical = isVertical
-        // 用 show() 而非 makeKeyAndOrderFront，避免 accessory app 抢焦点失败导致窗口不显示
         lightWindow?.show()
     }
 
@@ -140,5 +143,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let aggregate = SessionMonitor.aggregateState(sessions)
         lightWindow?.updateSessions(sessions)
         menuBarController.updateState(aggregate)
+    }
+
+    // MARK: - Quarantine Detection
+
+    private func checkQuarantineStatus() {
+        // 只在首次启动时检测，避免每次启动都弹窗
+        let didShowGuide = UserDefaults.standard.bool(forKey: "DidShowQuarantineGuide")
+        guard !didShowGuide else { return }
+
+        if PermissionGuidePanel.isQuarantined() {
+            PermissionGuidePanel.showGuide()
+            UserDefaults.standard.set(true, forKey: "DidShowQuarantineGuide")
+        }
+    }
+
+    @objc private func showPermissionGuide(_ sender: NSMenuItem) {
+        PermissionGuidePanel.showGuide()
     }
 }

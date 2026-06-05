@@ -21,7 +21,6 @@ jobs:
 
       - name: Build universal binary
         run: |
-          # Build for arm64
           swiftc \
             Sources/CCStatus/main.swift \
             Sources/CCStatus/AppDelegate.swift \
@@ -29,6 +28,7 @@ jobs:
             Sources/CCStatus/StatusLightView.swift \
             Sources/CCStatus/StatusLightWindow.swift \
             Sources/CCStatus/MenuBarIcon.swift \
+            Sources/CCStatus/PermissionGuidePanel.swift \
             -o cc-status-arm64 \
             -framework AppKit \
             -framework Foundation \
@@ -36,7 +36,6 @@ jobs:
             -swift-version 5 \
             -target arm64-apple-macosx13.0
 
-          # Build for x86_64
           swiftc \
             Sources/CCStatus/main.swift \
             Sources/CCStatus/AppDelegate.swift \
@@ -44,6 +43,7 @@ jobs:
             Sources/CCStatus/StatusLightView.swift \
             Sources/CCStatus/StatusLightWindow.swift \
             Sources/CCStatus/MenuBarIcon.swift \
+            Sources/CCStatus/PermissionGuidePanel.swift \
             -o cc-status-x86_64 \
             -framework AppKit \
             -framework Foundation \
@@ -51,7 +51,6 @@ jobs:
             -swift-version 5 \
             -target x86_64-apple-macosx13.0
 
-          # Create universal binary
           lipo -create cc-status-arm64 cc-status-x86_64 -output cc-status
           lipo -info cc-status
 
@@ -75,11 +74,6 @@ jobs:
         run: |
           APP_PATH="CCStatus.app"
 
-          # ad-hoc 签名，不加 --options runtime。
-          # 不用 Hardened Runtime 的原因：ad-hoc 无法公证，Hardened Runtime
-          # 下系统会静默拒绝 AppleScript 权限请求（不弹窗），导致点灯无响应。
-          # 不加 --options runtime 时走普通 TCC 流程，第一次执行 AppleScript
-          # 时系统会正常弹出"CC Status 想要控制 iTerm2"授权窗口。
           codesign --force --deep \
             --sign - \
             "${APP_PATH}"
@@ -98,6 +92,13 @@ jobs:
           rm -rf "$TMP_DIR"
           mkdir -p "$TMP_DIR"
           cp -R "${APP_NAME}.app" "$TMP_DIR/"
+
+          # 清除 app bundle 内所有文件的 quarantine xattr。
+          # DMG 本身下载后会被 Safari/浏览器加上 quarantine，但 DMG 内的 app
+          # 不应该有 quarantine——有了就会导致 AppleScript TCC 权限被静默拒绝，
+          # 系统不弹授权窗口，点状态灯无法拉起终端。
+          find "$TMP_DIR/${APP_NAME}.app" -exec xattr -c {} \; 2>/dev/null || true
+
           ln -s /Applications "$TMP_DIR/Applications"
 
           hdiutil create \
@@ -116,6 +117,8 @@ jobs:
           DMG_NAME="CC-Status-${VERSION}.dmg"
           hdiutil attach "${DMG_NAME}" -mountpoint /tmp/verify_dmg
           codesign --verify --verbose "/tmp/verify_dmg/CCStatus.app"
+          # 确认没有 quarantine xattr
+          xattr "/tmp/verify_dmg/CCStatus.app" || true
           echo "✅ DMG verification OK"
           hdiutil detach /tmp/verify_dmg
 
@@ -127,9 +130,7 @@ jobs:
             ## 安装说明
 
             1. 下载 DMG，打开后将 **CCStatus.app** 拖入 Applications
-            2. **首次启动**：右键点击 CCStatus.app → **打开** → 在弹窗中点击"打开"
-               （必须这样，否则 Gatekeeper 会阻止未公证的 app）
-            3. **首次点击状态灯**：系统会弹出「CC Status 想要控制 iTerm2/Terminal」权限请求，点击**好**
-               - 若误点了「不允许」，在 **系统设置 → 隐私与安全 → 自动化** 中手动勾选
+            2. **首次启动**：右键点击 CCStatus.app → **打开** → 在弹窗中点击「打开」
+            3. **首次点击状态灯**：系统会弹出「CC Status 想要控制 iTerm2」授权窗口，点击**好**
           files: ${{ env.DMG_NAME }}
           generate_release_notes: true

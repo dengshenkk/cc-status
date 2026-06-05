@@ -24,5 +24,7 @@
     <true/>
     <key>CFBundleIconFile</key>
     <string>icon</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>CC Status 需要控制终端应用(iTerm2/Terminal等)来切换 Claude Code 会话窗口</string>
 </dict>
 </plist>

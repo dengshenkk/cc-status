@@ -13,6 +13,7 @@ swiftc \
   Sources/CCStatus/StatusLightView.swift \
   Sources/CCStatus/StatusLightWindow.swift \
   Sources/CCStatus/MenuBarIcon.swift \
+  Sources/CCStatus/PermissionGuidePanel.swift \
   -o cc-status \
   -framework AppKit \
   -framework Foundation \
